@@ -33,13 +33,13 @@ usage: gmark evaluate [-f] [-g <data>] [-h] [-l <query language>] [-o <file>] [-
  -f,--force                       Overwrite the output file if present.
  -g,--graph <data>                The database graph file.
  -h,--help                        Prints this help text.
- -l,--language <query language>   The query language for the queries to execute (cpq or rpq).
+ -l,--language <query language>   The query language for the queries to execute (cpq, rpq or gql).
  -o,--output <file>               The file to write the query output to.
  -q,--query <query>               The query to evaluate.
  -s,--source <source>             Optionally the bound source node for the query.
  -t,--target <target>             Optionally the bound target node for the query.
- -w,--workload <file>             The query workload to run, one query per line with format
-                                  'source, query, target'.
+ -w,--workload <file>             The query workload to run, one GQL statement or
+                                  'source, query, target' record per line.
 ```
 
 The evaluator is intended to be used with either a single query to evaluate (`-s`/`-q`/`-t`) or with a complete workload of queries (`-w`). The database graph is expected to be provided in a simple text based graph format with on the first line the number of vertices, edges and labels, and a single edge definition following the `source target label` format on the remaining lines. Queries are expected to be either CPQs or RPQs and if provided as a workload file, a single query is allowed per line following the `source,query,target` format, if the source/target is not bound `*` can be provided instead. Finally, note that vertices and labels are represented by integers. Various example graphs and query workloads can be found in the [workload](gMark/test/workload) folder.
@@ -57,6 +57,19 @@ gmark evaluate -l cpq -w ./queries.cpq -g ./graph.edge -o out.txt
 ```
 
 Note that only limited query evaluation output is written to the console, in particular, the result paths are only written to the provided output file if any.
+
+##### Graph Query Language (GQL)
+
+Select **GQL** in the desktop Query Evaluation tab after loading an `.edge` file, or run:
+
+```sh
+gmark evaluate -l gql -g gMark/client/resources/example.edge \
+  -q 'MATCH (a)-[:L0]->(b) RETURN DISTINCT a.id AS source, b.id AS target'
+```
+
+The desktop displays the returned columns and rows. The CLI prints them to the console by default, and `-o` writes them to a file. Use `-w` for a workload with one complete GQL statement per line.
+
+This read-only subset supports a single fixed-length `MATCH` path or node, edge direction and labels, repeated variable bindings, and `RETURN` of elements or their properties with optional `DISTINCT` and `AS`. Matching uses the loaded graph. In `.edge` files, nodes have an `id` property and no labels. Edge label number `0` can be matched as `L0` or `0`. Edges expose `id`, `source`, `target`, and `label`, with identical source-target-label triples treated as one edge. Quantified paths, `WHERE`, graph updates, and generated-workload export are outside this subset.
 
 #### Workload Generation
 When using gMark on the command line for workload generation the following arguments are supported:

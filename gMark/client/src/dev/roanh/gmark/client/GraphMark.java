@@ -41,11 +41,6 @@ import dev.roanh.util.Util;
  */
 public class GraphMark{
 	/**
-	 * The main GUI frame.
-	 */
-	private static final JFrame frame = new JFrame("gMark");
-
-	/**
 	 * Launches the gMark GUI if not command line
 	 * arguments are passed. Otherwise switches
 	 * over to the CLI version of gMark.
@@ -60,7 +55,8 @@ public class GraphMark{
 		
 		System.out.println("Running gMark (GUI) version " + Main.VERSION);
 		Util.installUI();
-		Dialog.setDialogTitle("gMark");
+		JFrame frame = new JFrame("gMark - extended");
+		Dialog.setDialogTitle("gMark - extended");
 		Dialog.setParentFrame(frame);
 		
 		JPanel content = new JPanel(new BorderLayout());

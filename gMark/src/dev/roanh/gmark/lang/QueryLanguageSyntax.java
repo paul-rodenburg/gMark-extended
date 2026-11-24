@@ -52,7 +52,19 @@ public abstract interface QueryLanguageSyntax extends OutputSQL, OutputFormal, O
 	 * The character used to denote query output assignment.
 	 */
 	public static final char CHAR_ASSIGN = '←';
-	
+
+	public static final String MATCH = "MATCH ";
+
+	public static final String RETURN = " RETURN ";
+
+	public static final String FULL_EDGE_RIGHT = "-[]->";
+
+	public static final String FULL_EDGE_LEFT = "<-[]-";
+
+	public static final String GRAPH_TABLE = "GRAPH_TABLE (";
+
+	public static final String COLUMNS = " COLUMNS (";
+
 	/**
 	 * Gets the concrete query language used to defined this query.
 	 * @return The query language for this query.

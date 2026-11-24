@@ -19,6 +19,7 @@
 package dev.roanh.gmark.client;
 
 import java.awt.BorderLayout;
+import java.awt.FlowLayout;
 import java.awt.GridLayout;
 import java.awt.event.ActionEvent;
 import java.io.IOException;
@@ -28,6 +29,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Supplier;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -48,11 +50,14 @@ import javax.swing.text.BadLocationException;
 import dev.roanh.gmark.cli.client.EvaluatorClient;
 import dev.roanh.gmark.eval.DatabaseGraph;
 import dev.roanh.gmark.eval.PathQuery;
+import dev.roanh.gmark.eval.PropertyGraph;
+import dev.roanh.gmark.eval.PropertyGraphEvaluator;
 import dev.roanh.gmark.eval.ReachabilityQueryEvaluator;
 import dev.roanh.gmark.eval.ResultGraph;
 import dev.roanh.gmark.lang.QueryLanguage;
 import dev.roanh.gmark.lang.QueryLanguageSyntax;
 import dev.roanh.gmark.lang.ReachabilityQueryLanguageSyntax;
+import dev.roanh.gmark.lang.gql.GQL;
 import dev.roanh.gmark.util.Util;
 import dev.roanh.gmark.util.graph.generic.IntGraph;
 import dev.roanh.util.Dialog;
@@ -74,10 +79,6 @@ public class EvalTab extends JPanel{
 	 */
 	private static final FileExtension EDGE_EXT = FileSelector.registerFileExtension("Database Graph Files", "edge");
 	/**
-	 * List of special syntax symbols used in CPQ and RPQ queries.
-	 */
-	private static final List<String> QUERY_SYMBOLS;
-	/**
 	 * Background worker executor.
 	 */
 	private static final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -94,9 +95,12 @@ public class EvalTab extends JPanel{
 	 */
 	private final JTextArea queryOutput = new JTextArea();
 	/**
-	 * The current evaluator used to evaluate queries.
+	 * The graph loaded in the tab and its two evaluation views.
 	 */
-	private ReachabilityQueryEvaluator evaluator = null;
+	private LoadedGraph loadedGraph;
+
+	private record LoadedGraph(ReachabilityQueryEvaluator reachability, PropertyGraph properties){
+	}
 
 	/**
 	 * Constructs a new query evaluation tab.
@@ -111,9 +115,9 @@ public class EvalTab extends JPanel{
 		graph.add(loadGraph);
 		graph.add(graphInfo);
 			
-		JPanel input = new JPanel(new GridLayout(2, 1));
-		input.add(graph);
-		input.add(createQueryPanel(run));
+		JPanel input = new JPanel(new BorderLayout());
+		input.add(graph, BorderLayout.PAGE_START);
+		input.add(createQueryPanel(run), BorderLayout.CENTER);
 		
 		JPanel output = new JPanel(new BorderLayout());
 		output.setBorder(BorderFactory.createTitledBorder("Query Output"));
@@ -136,9 +140,11 @@ public class EvalTab extends JPanel{
 		JSpinner source = new JSpinner(new SpinnerNumberModel(-1, -1, Integer.MAX_VALUE, 1));
 		sourcePanel.add(source);
 		
-		JPanel queryPanel = new JPanel(new GridLayout(2, 1));
+		JPanel queryPanel = new JPanel(new GridLayout(3, 1));
 		JTextField query = new JTextField();
-		queryPanel.add(createQueryEditorButtons(query));
+		JPanel queryButtons = new JPanel();
+		queryButtons.setLayout(new BoxLayout(queryButtons, BoxLayout.X_AXIS));
+		queryPanel.add(queryButtons);
 		queryPanel.add(query);
 
 		JPanel targetPanel = new JPanel(new GridLayout(2, 1));
@@ -146,14 +152,33 @@ public class EvalTab extends JPanel{
 		JSpinner target = new JSpinner(new SpinnerNumberModel(-1, -1, Integer.MAX_VALUE, 1));
 		targetPanel.add(target);
 		
-		JPanel langPanel = new JPanel(new GridLayout(2, 1));
-		JComboBox<QueryLanguage> lang = new JComboBox<QueryLanguage>(QueryLanguage.streamReachabilityQueryLanguages().toArray(QueryLanguage[]::new));
-		langPanel.add(new JLabel("Language"));
+		JPanel langPanel = new JPanel(new FlowLayout(FlowLayout.LEADING, 6, 0));
+		JComboBox<QueryLanguage> lang = new JComboBox<QueryLanguage>(QueryLanguage.stream()
+			.filter(language->language.isReachabilityQueryLanguage() || language == QueryLanguage.PGQ || language == QueryLanguage.GQL)
+			.toArray(QueryLanguage[]::new));
+		updateQueryEditorButtons(queryButtons, query, lang.getItemAt(lang.getSelectedIndex()));
+		lang.addActionListener(_->{
+			QueryLanguage language = lang.getItemAt(lang.getSelectedIndex());
+			updateQueryEditorButtons(queryButtons, query, language);
+			source.setEnabled(language.isReachabilityQueryLanguage());
+			target.setEnabled(language.isReachabilityQueryLanguage());
+		});
+		JLabel langLabel = new JLabel("Language");
+		langLabel.setLabelFor(lang);
+		langPanel.add(langLabel);
 		langPanel.add(lang);
+		queryPanel.add(langPanel);
 		
 		run.addActionListener(_->{
+			QueryLanguage language = lang.getItemAt(lang.getSelectedIndex());
+			if(language == QueryLanguage.PGQ){
+				queryOutput.setText(language + " query evaluation is not implemented yet.");
+				return;
+			}
+
 			try{
-				if(evaluator == null){
+				LoadedGraph graph = loadedGraph;
+				if(graph == null){
 					Dialog.showMessageDialog("Please load a database graph first.");
 					return;
 				}
@@ -163,11 +188,31 @@ public class EvalTab extends JPanel{
 					return;
 				}
 
-				runQuery(PathQuery.of(
-					(int)source.getValue(),
-					(ReachabilityQueryLanguageSyntax)((QueryLanguage)lang.getSelectedItem()).parse(query.getText(), evaluator.getLabels()),
-					(int)target.getValue()
-				));
+				if(language == QueryLanguage.GQL){
+					GQL parsed = (GQL)language.parse(query.getText());
+					runQuery(()->{
+						long start = System.nanoTime();
+						var result = PropertyGraphEvaluator.evaluate(graph.properties(), parsed);
+						long time = System.nanoTime() - start;
+						StringWriter buffer = new StringWriter();
+						EvaluatorClient.printQueryResult(parsed, result, time, new PrintWriter(buffer));
+						return buffer.toString();
+					});
+				}else{
+					PathQuery parsed = PathQuery.of(
+						(int)source.getValue(),
+						(ReachabilityQueryLanguageSyntax)language.parse(query.getText(), graph.reachability().getLabels()),
+						(int)target.getValue()
+					);
+					runQuery(()->{
+						long start = System.nanoTime();
+						ResultGraph result = graph.reachability().evaluate(parsed);
+						long time = System.nanoTime() - start;
+						StringWriter buffer = new StringWriter();
+						EvaluatorClient.printQueryResult(parsed, result, time, new PrintWriter(buffer));
+						return buffer.toString();
+					});
+				}
 			}catch(Exception e1){
 				e1.printStackTrace();
 				Dialog.showErrorDialog("Failed to parse query: " + e1.getMessage());
@@ -182,27 +227,42 @@ public class EvalTab extends JPanel{
 		line.add(queryPanel);
 		line.add(Box.createHorizontalStrut(2));
 		line.add(targetPanel);
-		line.add(Box.createHorizontalStrut(2));
-		line.add(langPanel);
-		line.add(Box.createHorizontalStrut(2));
-		line.add(run);
 		return line;
 	}
 	
 	/**
-	 * Creates a panel with all the special symbols for query input.
-	 * @param query The query text field to insert symbols in.
-	 * @return The constructed panel with helper buttons.
+	 * Shows the input shortcuts for the selected query language.
+	 * @param buttons The panel holding the shortcut buttons.
+	 * @param query The query text field to insert shortcuts in.
+	 * @param language The currently selected query language.
 	 */
-	private JPanel createQueryEditorButtons(JTextField query){
-		JPanel buttons = new JPanel(new GridLayout(1, 0));
+	private void updateQueryEditorButtons(JPanel buttons, JTextField query, QueryLanguage language){
+		List<String> shortcuts = switch(language){
+			case PGQ -> List.of(QueryLanguageSyntax.GRAPH_TABLE, " " + QueryLanguageSyntax.MATCH,
+				QueryLanguageSyntax.COLUMNS, "(", ")", QueryLanguageSyntax.FULL_EDGE_LEFT,
+				QueryLanguageSyntax.FULL_EDGE_RIGHT, ":", ",");
+			case GQL -> List.of(QueryLanguageSyntax.MATCH, QueryLanguageSyntax.RETURN, "(", ")",
+				QueryLanguageSyntax.FULL_EDGE_LEFT, QueryLanguageSyntax.FULL_EDGE_RIGHT, ":", ",");
+			default -> List.of(
+				String.valueOf(QueryLanguageSyntax.CHAR_DISJUNCTION),
+				String.valueOf(QueryLanguageSyntax.CHAR_INTERSECTION),
+				String.valueOf(QueryLanguageSyntax.CHAR_JOIN),
+				String.valueOf(QueryLanguageSyntax.CHAR_INVERSE),
+				String.valueOf(QueryLanguageSyntax.CHAR_KLEENE),
+				"id", "(", ")"
+			);
+		};
 
-		for(String symb : QUERY_SYMBOLS){
-			JButton button = new JButton(symb);
+		buttons.removeAll();
+		for(String shortcut : shortcuts){
+			JButton button = new JButton(shortcut.strip());
 			button.addActionListener(_->{
 				try{
-					query.getDocument().insertString(query.getCaretPosition(), symb, null);
-					query.requestFocus();
+					int caret = query.getCaretPosition();
+					query.getDocument().insertString(caret, shortcut, null);
+					int brackets = shortcut.indexOf("[]");
+					query.setCaretPosition(caret + (brackets < 0 ? shortcut.length() : brackets + 1));
+					query.requestFocusInWindow();
 				}catch(BadLocationException ignore){
 				}
 			});
@@ -210,33 +270,32 @@ public class EvalTab extends JPanel{
 			buttons.add(button);
 		}
 		
-		return buttons;
+		buttons.revalidate();
+		buttons.repaint();
 	}
 	
 	/**
 	 * Runs the given query.
-	 * @param query The query to run.
+	 * @param evaluate The evaluation that returns the formatted output.
 	 */
-	private void runQuery(PathQuery query){
+	private void runQuery(Supplier<String> evaluate){
 		run.setEnabled(false);
 		queryOutput.setText("Running query...");
 		executor.execute(()->{
 			try{
-				long start = System.nanoTime();
-				ResultGraph result = evaluator.evaluate(query);
-				long time = System.nanoTime() - start;
-				
-				StringWriter buffer = new StringWriter();
-				EvaluatorClient.printQueryResult(query, result, time, new PrintWriter(buffer, true));
+				String output = evaluate.get();
 				SwingUtilities.invokeLater(()->{
-					queryOutput.setText(buffer.toString());
+					queryOutput.setText(output);
 					queryOutput.setCaretPosition(0);
-					run.setEnabled(true);
 				});
 			}catch(Exception e){
 				e.printStackTrace();
-				run.setEnabled(true);
-				Dialog.showErrorDialog("Failed to evaluate the query: " + e.getMessage());
+				SwingUtilities.invokeLater(()->{
+					queryOutput.setText("Failed to evaluate the query: " + e.getMessage());
+					Dialog.showErrorDialog(queryOutput.getText());
+				});
+			}finally{
+				SwingUtilities.invokeLater(()->run.setEnabled(true));
 			}
 		});
 	}
@@ -253,28 +312,22 @@ public class EvalTab extends JPanel{
 			executor.execute(()->{
 				try{
 					IntGraph data = Util.readGraph(file);
+					if(data == null){
+						throw new IOException("The graph file is empty.");
+					}
 					DatabaseGraph db = new DatabaseGraph(data);
-					evaluator = new ReachabilityQueryEvaluator(db);
-					graphInfo.setText("Vertices: %d, Edges: %d (%d unique), Labels: %d".formatted(data.getVertexCount(), data.getEdgeCount(), db.getEdgeCount(), data.getLabelCount()));
-				}catch(IOException e){
-					Dialog.showErrorDialog("Failed to read the database graph: " + e.getMessage());
+					LoadedGraph graph = new LoadedGraph(new ReachabilityQueryEvaluator(db), PropertyGraph.fromIntGraph(data));
+					SwingUtilities.invokeLater(()->{
+						loadedGraph = graph;
+						graphInfo.setText("Vertices: %d, Edges: %d (%d unique), Labels: %d".formatted(data.getVertexCount(), data.getEdgeCount(), db.getEdgeCount(), data.getLabelCount()));
+					});
+				}catch(IOException | IllegalArgumentException e){
+					SwingUtilities.invokeLater(()->Dialog.showErrorDialog("Failed to read the database graph: " + e.getMessage()));
 				}finally{
-					button.setEnabled(true);
+					SwingUtilities.invokeLater(()->button.setEnabled(true));
 				}
 			});
 		}
 	}
 	
-	static{
-		QUERY_SYMBOLS = List.of(
-			String.valueOf(QueryLanguageSyntax.CHAR_DISJUNCTION),
-			String.valueOf(QueryLanguageSyntax.CHAR_INTERSECTION),
-			String.valueOf(QueryLanguageSyntax.CHAR_JOIN),
-			String.valueOf(QueryLanguageSyntax.CHAR_INVERSE),
-			String.valueOf(QueryLanguageSyntax.CHAR_KLEENE),
-			"id",
-			"(",
-			")"
-		);
-	}
 }

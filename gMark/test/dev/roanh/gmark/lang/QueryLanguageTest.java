@@ -20,6 +20,7 @@ package dev.roanh.gmark.lang;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -38,7 +39,7 @@ public class QueryLanguageTest{
 		for(QueryLanguage language : QueryLanguage.values()){
 			if(language == QueryLanguage.CPQ || language == QueryLanguage.RPQ){
 				assertTrue(language.isReachabilityQueryLanguage());
-			}else if(language == QueryLanguage.CQ){
+			}else if(language == QueryLanguage.CQ || language == QueryLanguage.PGQ || language == QueryLanguage.GQL){
 				assertFalse(language.isReachabilityQueryLanguage());
 			}else{
 				fail("Unknown query language");
@@ -51,11 +52,18 @@ public class QueryLanguageTest{
 		Map<QueryLanguage, String> queries = Map.of(
 			QueryLanguage.CPQ, "id",
 			QueryLanguage.RPQ, "a",
-			QueryLanguage.CQ, "(f1) ← a(f1, f1)"
+			QueryLanguage.CQ, "(f1) ← a(f1, f1)",
+			QueryLanguage.GQL, "MATCH (n) RETURN n.id"
 		);
 		
 		for(String name : Arrays.stream(QueryLanguage.values()).map(QueryLanguage::name).toList()){
 			QueryLanguage lang = QueryLanguage.fromName(name).orElseThrow();
+			if(lang == QueryLanguage.PGQ){
+				assertThrows(UnsupportedOperationException.class, ()->lang.parse(""));
+				assertThrows(UnsupportedOperationException.class, ()->lang.parse("", List.of()));
+				continue;
+			}
+
 			assertTrue(queries.containsKey(lang));
 			assertEquals(lang, lang.parse(queries.get(lang)).getQueryLanguage());
 			assertEquals(lang, lang.parse(queries.get(lang), List.of(new Predicate(0, "a"))).getQueryLanguage());

@@ -24,8 +24,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.Option;
@@ -35,10 +37,15 @@ import dev.roanh.gmark.cli.InputException;
 import dev.roanh.gmark.data.SourceTargetPair;
 import dev.roanh.gmark.eval.DatabaseGraph;
 import dev.roanh.gmark.eval.PathQuery;
+import dev.roanh.gmark.eval.PropertyGraph;
+import dev.roanh.gmark.eval.PropertyGraphEvaluator;
+import dev.roanh.gmark.eval.PropertyGraphQueryResult;
 import dev.roanh.gmark.eval.ReachabilityQueryEvaluator;
 import dev.roanh.gmark.eval.ResultGraph;
 import dev.roanh.gmark.lang.QueryLanguage;
 import dev.roanh.gmark.lang.ReachabilityQueryLanguageSyntax;
+import dev.roanh.gmark.lang.gql.GQL;
+import dev.roanh.gmark.lang.gql.ParserGQL;
 import dev.roanh.gmark.type.schema.Predicate;
 import dev.roanh.gmark.util.Util;
 import dev.roanh.gmark.util.graph.generic.IntGraph;
@@ -63,9 +70,9 @@ public final class EvaluatorClient extends CommandLineClient{
 	private EvaluatorClient(){
 		super(
 			"evaluate",
-			Option.builder("l").longOpt("language").hasArg().argName("query language").desc("The query language for the queries to execute (cpq or rpq).").build(),
+			Option.builder("l").longOpt("language").hasArg().argName("query language").desc("The query language for the queries to execute (cpq, rpq or gql).").build(),
 			Option.builder("g").longOpt("graph").hasArg().argName("data").desc("The database graph file.").build(),
-			Option.builder("w").longOpt("workload").hasArg().argName("file").desc("The query workload to run, one query per line with format 'source, query, target'.").build(),
+			Option.builder("w").longOpt("workload").hasArg().argName("file").desc("The query workload to run, one GQL statement or 'source, query, target' record per line.").build(),
 			Option.builder("s").longOpt("source").hasArg().argName("source").desc("Optionally the bound source node for the query.").build(),
 			Option.builder("q").longOpt("query").hasArg().argName("query").desc("The query to evaluate.").build(),
 			Option.builder("t").longOpt("target").hasArg().argName("target").desc("Optionally the bound target node for the query.").build(),
@@ -79,13 +86,57 @@ public final class EvaluatorClient extends CommandLineClient{
 		QueryLanguage language = QueryLanguage.fromName(cli.getOptionValue('l')).orElse(null);
 		if(language == null){
 			throw new InputException("No query language specified.");
+		}else if(language == QueryLanguage.GQL){
+			executeGQL(cli);
+			return;
 		}else if(!language.isReachabilityQueryLanguage()){
-			throw new InputException("Only evaluation of reachability queries is supported currently.");
+			throw new InputException("Evaluation is not available for " + language + ".");
 		}
 		
-		DatabaseGraph graph = readDatabaseGraph(cli);
+		DatabaseGraph graph = new DatabaseGraph(readDatabaseGraph(cli));
 		List<PathQuery> queries = readQueries(language, graph, cli);
 		executeQueries(graph, queries, resolveOutputPath(cli));
+	}
+
+	private void executeGQL(CommandLine cli) throws InputException{
+		if(cli.hasOption('s') || cli.hasOption('t')){
+			throw new InputException("Source and target options are only supported for CPQ and RPQ queries.");
+		}
+		if(cli.hasOption('q') == cli.hasOption('w')){
+			throw new InputException("Provide a GQL query (-q) or a workload file (-w).");
+		}
+		PropertyGraph graph = PropertyGraph.fromIntGraph(readDatabaseGraph(cli));
+		Path output = resolveOutputPath(cli);
+		List<? extends GQL> queries;
+		try{
+			queries = cli.hasOption('q') ? List.of(ParserGQL.parse(cli.getOptionValue('q'))) :
+				Files.readAllLines(Path.of(cli.getOptionValue('w'))).stream().filter(line->!line.isBlank()).map(ParserGQL::parse).toList();
+		}catch(IllegalArgumentException e){
+			throw new InputException("Failed to parse GQL query: " + e.getMessage());
+		}catch(IOException e){
+			throw new InputException("Failed to read the provided GQL workload file: " + e.getMessage());
+		}
+		if(output == null){
+			writeGQLResults(graph, queries, new PrintWriter(System.out, true));
+		}else{
+			try(PrintWriter writer = new PrintWriter(Files.newBufferedWriter(output))){
+				writeGQLResults(graph, queries, writer);
+				if(writer.checkError()){
+					throw new InputException("Failed to write GQL results to " + output + ".");
+				}
+			}catch(IOException e){
+				throw new InputException("Failed to write GQL results: " + e.getMessage());
+			}
+		}
+	}
+
+	private void writeGQLResults(PropertyGraph graph, List<? extends GQL> queries, PrintWriter writer){
+		for(GQL query : queries){
+			long start = System.nanoTime();
+			PropertyGraphQueryResult result = PropertyGraphEvaluator.evaluate(graph, query);
+			printQueryResult(query, result, System.nanoTime() - start, writer);
+			writer.println();
+		}
 	}
 	
 	/**
@@ -128,7 +179,7 @@ public final class EvaluatorClient extends CommandLineClient{
 	 * @return The read database graph.
 	 * @throws InputException When the provided CLI input contains issues.
 	 */
-	private DatabaseGraph readDatabaseGraph(CommandLine cli) throws InputException{
+	private IntGraph readDatabaseGraph(CommandLine cli) throws InputException{
 		if(!cli.hasOption('g')){
 			throw new InputException("No database graph provided.");
 		}
@@ -140,7 +191,7 @@ public final class EvaluatorClient extends CommandLineClient{
 				throw new InputException("Failed to parse the provided graph file.");
 			}
 			
-			return new DatabaseGraph(data);
+			return data;
 		}catch(IOException e){
 			e.printStackTrace();
 			throw new InputException("Failed to read the provided graph file.");
@@ -208,7 +259,7 @@ public final class EvaluatorClient extends CommandLineClient{
 	
 	@Override
 	public String getHelpFooter(){
-		return "note: the evaluator is intended to be used with either a single query to evaluate (-s/-q/-t) or with a complete workload of queries (-w).";
+		return "Use -q for a single query or -w for a workload. Source and target options apply to CPQ and RPQ.";
 	}
 	
 	/**
@@ -226,5 +277,23 @@ public final class EvaluatorClient extends CommandLineClient{
 		for(SourceTargetPair pair : result.getSourceTargetPairs()){
 			writer.println(pair);
 		}
+	}
+
+	/**
+	 * Formats the columns and rows returned by a GQL query.
+	 */
+	public static void printQueryResult(GQL query, PropertyGraphQueryResult result, long timeNs, PrintWriter writer){
+		writer.println("Evaluated query: " + query.toFormalSyntax());
+		writer.println("Evaluation time: " + TimeUnit.NANOSECONDS.toMillis(timeNs) + " ms");
+		writer.println("Result rows: " + result.getRows().size());
+		writer.println("===== Result Table =====");
+		printRow(result.getColumns(), writer);
+		result.getRows().forEach(row->printRow(row, writer));
+	}
+
+	private static void printRow(List<?> values, PrintWriter writer){
+		writer.println(values.stream().map(Objects::toString)
+			.map(value->value.replace("\\", "\\\\").replace("\t", "\\t").replace("\r", "\\r").replace("\n", "\\n"))
+			.collect(Collectors.joining("\t")));
 	}
 }

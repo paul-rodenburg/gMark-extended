@@ -30,12 +30,16 @@ import dev.roanh.gmark.lang.cpq.CPQ;
 import dev.roanh.gmark.lang.cpq.ParserCPQ;
 import dev.roanh.gmark.lang.cq.CQ;
 import dev.roanh.gmark.lang.cq.ParserCQ;
+import dev.roanh.gmark.lang.gql.GQL;
+import dev.roanh.gmark.lang.gql.ParserGQL;
+import dev.roanh.gmark.lang.pgq.PGQ;
+import dev.roanh.gmark.lang.pgq.ParserPGQ;
 import dev.roanh.gmark.lang.rpq.ParserRPQ;
 import dev.roanh.gmark.lang.rpq.RPQ;
 import dev.roanh.gmark.type.schema.Predicate;
 
 /**
- * Enum of implemented concrete query languages. A query language
+ * Enum of registered concrete query languages. A query language
  * is a formal syntax that can be used to query a database that is
  * build using a subset of database operations.
  * @author Roan
@@ -59,7 +63,17 @@ public enum QueryLanguage{
 	 * The language of Conjunctive Queries.
 	 * @see CQ
 	 */
-	CQ(ParserCQ::parse, ParserCQ::parse);
+	CQ(ParserCQ::parse, ParserCQ::parse),
+	/**
+	 * SQL Property Graph Queries. Parsing is pending.
+	 * @see PGQ
+	 */
+	PGQ(ParserPGQ::parse, ParserPGQ::parse),
+	/**
+	 * Read-only Graph Query Language for fixed-length MATCH paths.
+	 * @see GQL
+	 */
+	GQL(ParserGQL::parse, ParserGQL::parse);
 	
 	/**
 	 * The function to use to parse a query without a given label set.
@@ -94,6 +108,7 @@ public enum QueryLanguage{
 	 * and created the required label set on the fly as new symbols are discovered.
 	 * @param query The query to parse.
 	 * @return The parsed query.
+	 * @throws UnsupportedOperationException When parsing is not implemented for this language.
 	 * @see #parse(String, List)
 	 */
 	public QueryLanguageSyntax parse(String query){
@@ -106,6 +121,7 @@ public enum QueryLanguage{
 	 * @param query The query to parse.
 	 * @param labels The label set to use when parsing the query.
 	 * @return The parsed query.
+	 * @throws UnsupportedOperationException When parsing is not implemented for this language.
 	 * @see #parse(String)
 	 */
 	public QueryLanguageSyntax parse(String query, List<Predicate> labels){
